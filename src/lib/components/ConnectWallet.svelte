@@ -51,8 +51,8 @@
 		network: 'localhost',
 		nativeCurrency: {
 			decimals: 18,
-			name: 'Widya',
-			symbol: 'WDC'
+			name: 'Etherium',
+			symbol: 'ETH'
 		},
 		rpcUrls: {
 			default: { http: [rpc] },
