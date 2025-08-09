@@ -14,13 +14,16 @@ function getRedirectUrl(path: string = '/auth/callback'): string {
 	if (typeof window !== 'undefined') {
 		return PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}${path}` : `${window.location.origin}${path}`;
 	}
-	return `${PUBLIC_BASE_URL || 'http://localhost:5173'}${path}`;
+	return `${PUBLIC_BASE_URL || 'https://sabdarana.arutalaaksara.com'}${path}`;
 }
 
 // Manual registration
-export async function signUpWithEmail(email: string, password: string, username: string): Promise<AuthResponse> {
+export async function signUpWithEmail(
+	email: string,
+	password: string,
+	username: string
+): Promise<AuthResponse> {
 	try {
-		
 		const { data, error } = await supabase.auth.signUp({
 			email,
 			password,
@@ -34,7 +37,6 @@ export async function signUpWithEmail(email: string, password: string, username:
 		});
 
 		if (error) {
-				
 			// Provide more specific error messages
 			if (error.message.includes('already registered')) {
 				return { success: false, error: 'Email sudah terdaftar. Silakan login.' };
@@ -45,7 +47,7 @@ export async function signUpWithEmail(email: string, password: string, username:
 			if (error.message.includes('password')) {
 				return { success: false, error: 'Password tidak memenuhi syarat (minimal 6 karakter)' };
 			}
-			
+
 			return { success: false, error: error.message };
 		}
 
@@ -58,14 +60,12 @@ export async function signUpWithEmail(email: string, password: string, username:
 // Manual login
 export async function signInWithEmail(email: string, password: string): Promise<AuthResponse> {
 	try {
-		
 		const { data, error } = await supabase.auth.signInWithPassword({
 			email,
 			password
 		});
 
 		if (error) {
-				
 			// Provide more specific error messages
 			if (error.message.includes('Invalid login credentials')) {
 				return { success: false, error: 'Email atau password salah' };
@@ -76,7 +76,7 @@ export async function signInWithEmail(email: string, password: string): Promise<
 			if (error.message.includes('User not found')) {
 				return { success: false, error: 'User tidak ditemukan. Silakan daftar terlebih dahulu.' };
 			}
-			
+
 			return { success: false, error: error.message };
 		}
 
@@ -89,20 +89,19 @@ export async function signInWithEmail(email: string, password: string): Promise<
 // Google OAuth login
 export async function signInWithGoogle(): Promise<AuthResponse> {
 	try {
-		
 		const { data, error } = await supabase.auth.signInWithOAuth({
 			provider: 'google',
 			options: {
 				redirectTo: getRedirectUrl('/auth/callback'),
 				queryParams: {
 					access_type: 'offline',
-					prompt: 'consent',
+					prompt: 'consent'
 				}
 			}
 		});
 
 		if (error) {
-				return { success: false, error: error.message };
+			return { success: false, error: error.message };
 		}
 
 		// OAuth redirect will happen automatically
@@ -116,13 +115,14 @@ export async function signInWithGoogle(): Promise<AuthResponse> {
 export async function signOut(): Promise<void> {
 	try {
 		await supabase.auth.signOut();
-	} catch (error) {
-	}
+	} catch (error) {}
 }
 
 // Get current user
 export async function getCurrentUser() {
-	const { data: { user } } = await supabase.auth.getUser();
+	const {
+		data: { user }
+	} = await supabase.auth.getUser();
 	return user;
 }
 

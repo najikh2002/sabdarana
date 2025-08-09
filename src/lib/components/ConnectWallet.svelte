@@ -48,7 +48,7 @@
 	const hardhat = defineChain({
 		id: 31337,
 		name: 'Sabdarana',
-		network: 'localhost',
+		network: 'sabdarana',
 		nativeCurrency: {
 			decimals: 18,
 			name: 'Etherium',

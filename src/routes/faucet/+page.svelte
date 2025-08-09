@@ -57,7 +57,7 @@
 
 	const hardhat = defineChain({
 		id: 31337,
-		name: 'Sabdarana Global Network',
+		name: 'Sabdarana',
 		network: 'sabdarana',
 		nativeCurrency: {
 			decimals: 18,
