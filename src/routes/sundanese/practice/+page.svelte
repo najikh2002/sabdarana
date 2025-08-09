@@ -93,6 +93,7 @@
 			labels={characterLabels.map(({ icon, value }) => ({ label: value, value: icon }))}
 			onNextCharacter={handleNextCharacter}
 			onCloseDialog={handleCloseDialog}
+			learning="practice"
 		/>
 	{/if}
 </div>
