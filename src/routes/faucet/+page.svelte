@@ -12,7 +12,7 @@
 	} from 'svelte-wagmi';
 
 	import { injected } from '@wagmi/connectors';
-	import { defineChain, parseUnits, isAddress } from 'viem';
+	import { defineChain, parseUnits, isAddress, parseEther, formatEther } from 'viem';
 	import {
 		writeContract,
 		waitForTransactionReceipt,
@@ -20,10 +20,15 @@
 		getAccount,
 		getWalletClient,
 		watchAccount,
-		getPublicClient
+		getPublicClient,
+		getBalance,
+		sendTransaction
 	} from '@wagmi/core';
 	import { walletState } from '$lib/stores/walletState';
 	import { rpc } from '$lib/constants/rpc';
+
+	// Update RPC configuration untuk globalNode
+	const RPC_URL = rpc || 'https://sabdarana-network.arutalaaksara.com';
 
 	const {
 		loading,
@@ -44,22 +49,34 @@
 
 	const CONTRACT_ADDRESS = '0x663F3ad617193148711d28f5334eE4Ed07016602';
 	const MAX_RETRY = 3;
+	const FAUCET_AMOUNT = '1'; // 1 ETH per request
+	const COOLDOWN_TIME = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+
+	// Faucet private key (dalam production, ini harus di-secure dengan proper key management)
+	const FAUCET_PRIVATE_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
 
 	const hardhat = defineChain({
 		id: 31337,
-		name: 'Sabdarana',
-		network: 'localhost',
+		name: 'Sabdarana Global Network',
+		network: 'sabdarana',
 		nativeCurrency: {
 			decimals: 18,
-			name: 'Widya',
-			symbol: 'WDC'
+			name: 'Ethereum',
+			symbol: 'ETH'
 		},
 		rpcUrls: {
-			default: { http: [rpc] },
-			public: { http: [rpc] }
+			default: { http: [RPC_URL] },
+			public: { http: [RPC_URL] }
 		},
-		testnet: true
+		testnet: false // Set ke false karena ini global network
 	});
+
+	// State untuk faucet
+	let ethBalance = 0n;
+	let lastFaucetClaim = 0;
+	let canClaimFaucet = true;
+	let faucetLoading = false;
+	let faucetError = '';
 
 	// Derived store untuk status koneksi yang reliable
 	const isConnectedAndReady = derived([connected, wagmiConfig], ([$connected, $wagmiConfig]) => {
@@ -83,22 +100,19 @@
 		try {
 			console.log('⚙️ Configuring Web3Modal...');
 
-			// Configure Web3Modal dengan storage persistence
 			defaultConfig({
 				appName: 'Sabdarana',
 				connectors: [
 					injected({
 						chains: [hardhat],
-						// Tambahkan shimDisconnect untuk persistence yang lebih baik
 						shimDisconnect: false
 					})
 				],
 				chains: [hardhat],
 				autoConnect: true,
 				walletConnectProjectId: 'aee031fb671149534998b02bf449f1e4',
-				// Tambahkan storage config untuk persistence
 				storage: {
-					key: 'sabdarana-wagmi',
+					key: 'sabdarana-global-wagmi',
 					serialize: JSON.stringify,
 					deserialize: JSON.parse
 				}
@@ -106,21 +120,13 @@
 
 			console.log('🔧 Initializing wagmi...');
 			await init();
-
-			// Wait extra time untuk storage hydration
 			await new Promise((resolve) => setTimeout(resolve, 500));
 			$initialized = true;
 
-			// Wait untuk wagmi fully loaded dengan lebih lama
 			await waitForWagmiReady();
-
-			// Wait untuk storage hydration selesai
 			await waitForStorageHydration();
-
-			// Check contract exists
 			await checkContractExists();
 
-			// Setup account watcher only if contract exists
 			if ($contractExists) {
 				setupAccountWatcher();
 				await checkConnectionWithRetry();
@@ -129,7 +135,6 @@
 			console.error('❌ Initialization failed:', error);
 			$networkError = `Initialization failed: ${error.message}`;
 
-			// Retry initialization
 			if ($retryCount < MAX_RETRY) {
 				$retryCount++;
 				console.log(`🔄 Retrying initialization (${retryCount}/${MAX_RETRY})...`);
@@ -139,8 +144,8 @@
 	}
 
 	async function waitForWagmiReady() {
-		const maxWait = 10000; // Increase to 10 seconds
-		const checkInterval = 200; // Check every 200ms
+		const maxWait = 10000;
+		const checkInterval = 200;
 		let waited = 0;
 
 		return new Promise<void>((resolve) => {
@@ -167,7 +172,6 @@
 	}
 
 	async function waitForStorageHydration() {
-		// Wait untuk localStorage dan sessionStorage di-hydrate
 		const maxWait = 3000;
 		const checkInterval = 100;
 		let waited = 0;
@@ -175,11 +179,9 @@
 		return new Promise<void>((resolve) => {
 			const checkHydration = () => {
 				try {
-					// Check if storage is accessible
 					const config = get(wagmiConfig);
 					if (config) {
 						const account = getAccount(config);
-						// Jika ada stored connection, tunggu sedikit lagi
 						if (account?.status === 'connecting') {
 							console.log('🔄 Still hydrating connection...');
 							waited += checkInterval;
@@ -210,30 +212,26 @@
 				throw new Error('Wagmi config not available');
 			}
 
-			// Validate contract address
 			if (!isAddress(CONTRACT_ADDRESS)) {
 				throw new Error('Invalid contract address');
 			}
 
-			// Get public client to check if address is a contract
 			const publicClient = getPublicClient(config);
 			if (!publicClient) {
 				throw new Error('Public client not available');
 			}
 
-			// Check if there's code at the contract address
 			const code = await publicClient.getCode({ address: CONTRACT_ADDRESS });
 
 			if (!code || code === '0x') {
 				throw new Error('No contract found at specified address');
 			}
 
-			// Try to read a simple contract property to verify it's working
 			try {
 				await readContract(config, {
 					address: CONTRACT_ADDRESS,
 					abi: WDC_ABI,
-					functionName: 'name' // Assuming ERC20 has name function
+					functionName: 'name'
 				});
 
 				$contractExists = true;
@@ -241,7 +239,6 @@
 				console.log('✅ Contract verified and accessible');
 			} catch (readError) {
 				console.warn('⚠️ Contract exists but may not be the expected type:', readError);
-				// Still set contractExists to true, let individual calls handle their errors
 				$contractExists = true;
 			}
 		} catch (error) {
@@ -273,6 +270,8 @@
 
 					if ($contractExists) {
 						await loadBalanceWithRetry();
+						await loadEthBalance();
+						checkFaucetCooldown();
 					}
 				} else {
 					console.log('🔌 Wallet disconnected, resetting state');
@@ -283,7 +282,6 @@
 	}
 
 	async function checkConnectionWithRetry() {
-		// Tambahkan initial delay untuk memastikan storage sudah ready
 		await new Promise((resolve) => setTimeout(resolve, 1000));
 
 		for (let i = 0; i < MAX_RETRY; i++) {
@@ -302,25 +300,24 @@
 					status: account?.status
 				});
 
-				// Check for any connection status, not just 'connected'
 				if (account?.address && (account?.isConnected || account?.status === 'connected')) {
 					$currentAddress = account.address;
 					console.log('✅ Found existing connection:', $currentAddress);
 
 					if ($contractExists) {
 						await loadBalanceWithRetry();
+						await loadEthBalance();
+						checkFaucetCooldown();
 					}
 					break;
 				} else if (account?.status === 'connecting') {
 					console.log('🔄 Connection in progress, waiting...');
-					// Wait longer for connecting status
 					await new Promise((resolve) => setTimeout(resolve, 2000));
 					continue;
 				} else {
 					console.log(`❌ No connection found on attempt ${i + 1}`);
 				}
 
-				// Wait before retry dengan exponential backoff
 				if (i < MAX_RETRY - 1) {
 					await new Promise((resolve) => setTimeout(resolve, 1000 * (i + 1)));
 				}
@@ -349,12 +346,49 @@
 			} catch (error) {
 				console.error(`❌ Balance load attempt ${i + 1} failed:`, error);
 				if (i === MAX_RETRY - 1) {
-					// Last attempt failed, show user-friendly message
 					$balance = 0n;
 					$networkError = 'Unable to load balance. Contract may be unavailable.';
 				} else {
 					await new Promise((resolve) => setTimeout(resolve, 1000));
 				}
+			}
+		}
+	}
+
+	async function loadEthBalance() {
+		try {
+			const config = get(wagmiConfig);
+			if (!config) {
+				throw new Error('Wagmi config not available');
+			}
+
+			const account = getAccount(config);
+			if (!account?.address) {
+				throw new Error('No wallet address available');
+			}
+
+			console.log('🔍 Checking ETH balance for:', account.address);
+
+			const balance = await getBalance(config, {
+				address: account.address
+			});
+
+			console.log('💰 ETH Balance result:', balance);
+			ethBalance = balance.value;
+		} catch (error) {
+			console.error('❌ ETH balance load failed:', error);
+		}
+	}
+
+	function checkFaucetCooldown() {
+		if (typeof window !== 'undefined') {
+			const lastClaim = localStorage.getItem(`faucet_${$currentAddress}`);
+			if (lastClaim) {
+				lastFaucetClaim = parseInt(lastClaim);
+				const timePassed = Date.now() - lastFaucetClaim;
+				canClaimFaucet = timePassed >= COOLDOWN_TIME;
+			} else {
+				canClaimFaucet = true;
 			}
 		}
 	}
@@ -365,6 +399,90 @@
 		$reward = 0n;
 		$warnedOnce = false;
 		$networkError = '';
+		ethBalance = 0n;
+		lastFaucetClaim = 0;
+		canClaimFaucet = true;
+		faucetError = '';
+	}
+
+	// Faucet ETH function
+	export async function claimETH() {
+		if (faucetLoading || !$contractExists) return;
+
+		faucetLoading = true;
+		faucetError = '';
+
+		try {
+			const config = get(wagmiConfig);
+			if (!config) {
+				throw new Error('Wagmi config not available');
+			}
+
+			const account = getAccount(config);
+			if (!account?.isConnected || !account?.address) {
+				throw new Error('Wallet not connected');
+			}
+
+			// Check network
+			if ($chainId !== 31337) {
+				throw new Error('Wrong network. Please switch to Sabdarana (Chain ID: 31337)');
+			}
+
+			// Check cooldown
+			if (!canClaimFaucet) {
+				const remainingTime = COOLDOWN_TIME - (Date.now() - lastFaucetClaim);
+				const hours = Math.ceil(remainingTime / (60 * 60 * 1000));
+				throw new Error(`Please wait ${hours} more hours before claiming again`);
+			}
+
+			console.log('💧 Claiming ETH from faucet for:', account.address);
+
+			// Menggunakan Hardhat's built-in accounts untuk faucet
+			// Dalam environment production, Anda perlu setup proper faucet backend
+			const walletClient = await getWalletClient(config);
+			if (!walletClient) {
+				throw new Error('Wallet client not available');
+			}
+
+			// Simulasi faucet dengan transfer dari account hardhat default
+			// Dalam production, ini harus diganti dengan proper faucet backend API call
+			const response = await fetch('/api/faucet', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json'
+				},
+				body: JSON.stringify({
+					address: account.address,
+					amount: FAUCET_AMOUNT
+				})
+			});
+
+			if (!response.ok) {
+				const error = await response.json();
+				throw new Error(error.message || 'Faucet request failed');
+			}
+
+			const result = await response.json();
+			console.log('✅ Faucet transaction:', result);
+
+			// Update state
+			if (typeof window !== 'undefined') {
+				localStorage.setItem(`faucet_${$currentAddress}`, Date.now().toString());
+			}
+			lastFaucetClaim = Date.now();
+			canClaimFaucet = false;
+
+			// Reload ETH balance
+			await loadEthBalance();
+
+			alert(`✅ Successfully claimed ${FAUCET_AMOUNT} ETH! TX: ${result.txHash}`);
+		} catch (err: any) {
+			console.error('❌ ETH faucet failed:', err);
+			faucetError = err.message || 'Failed to claim ETH';
+			alert(`❌ Faucet failed: ${faucetError}`);
+		} finally {
+			faucetLoading = false;
+		}
 	}
 
 	export async function claimReward(rewardItem: any) {
@@ -385,7 +503,6 @@
 				throw new Error('Wallet not connected');
 			}
 
-			// Check network first
 			if ($chainId !== 31337) {
 				throw new Error('Wrong network. Please switch to Sabdarana (Chain ID: 31337)');
 			}
@@ -394,7 +511,6 @@
 			console.log('⛏️ Minting to:', account.address);
 			$loadingStep = 'Sending transaction...';
 
-			// Try different approaches for writeContract
 			try {
 				const txResult = await writeContract(config, {
 					address: CONTRACT_ADDRESS,
@@ -404,9 +520,6 @@
 					account: account.address
 				});
 
-				console.log('📦 TX Result:', txResult);
-
-				// Handle different return formats
 				hash = txResult?.hash || txResult;
 
 				if (!hash) {
@@ -417,7 +530,6 @@
 			} catch (writeError) {
 				console.error('❌ WriteContract error:', writeError);
 
-				// Try alternative approach with walletClient
 				const walletClient = await getWalletClient(config);
 				if (!walletClient) {
 					throw new Error('Wallet client not available');
@@ -441,19 +553,12 @@
 				$reward = rewardAmount;
 				await loadBalanceWithRetry();
 				alert(`✅ Berhasil claim! TX: ${hash}`);
-				$networkError = ''; // Clear any previous errors
+				$networkError = '';
 			} else {
 				throw new Error('Failed to get transaction hash');
 			}
 		} catch (err: any) {
 			console.error('❌ Claim failed:', err);
-			console.error('❌ Error details:', {
-				message: err?.message,
-				shortMessage: err?.shortMessage,
-				cause: err?.cause,
-				details: err?.details,
-				stack: err?.stack?.split('\n').slice(0, 3) // First 3 lines of stack
-			});
 
 			let errorMessage = 'Unknown error';
 
@@ -499,7 +604,7 @@
 
 		console.log('💰 Balance result:', result);
 		$balance = result as bigint;
-		$networkError = ''; // Clear error on success
+		$networkError = '';
 	}
 
 	async function customDisconnect() {
@@ -529,7 +634,9 @@
 			console.log('🔗 Opening wallet connection...');
 
 			if (!$contractExists) {
-				alert('⚠️ Contract not accessible. Please check your network connection and RPC URL.');
+				alert(
+					'⚠️ Contract not accessible on Sabdarana Global Network. Please check your connection.'
+				);
 				return;
 			}
 
@@ -556,10 +663,23 @@
 		}
 	}
 
+	function formatEthBalance(bal: bigint): string {
+		return formatEther(bal);
+	}
+
+	function getCooldownRemaining(): string {
+		if (canClaimFaucet) return '';
+
+		const remainingTime = COOLDOWN_TIME - (Date.now() - lastFaucetClaim);
+		const hours = Math.floor(remainingTime / (60 * 60 * 1000));
+		const minutes = Math.floor((remainingTime % (60 * 60 * 1000)) / (60 * 1000));
+
+		return `${hours}h ${minutes}m`;
+	}
+
 	function retryConnection() {
 		$networkError = '';
 		$retryCount = 0;
-		// Clear any cached state
 		resetWalletState();
 		$initialized = false;
 		$connectionChecked = false;
@@ -567,13 +687,11 @@
 		initializeWeb3();
 	}
 
-	// Reactive statement untuk handle network warning
 	$: if ($chainId && $chainId !== 31337 && !$warnedOnce && $isConnectedAndReady) {
 		console.log('⚠️ Wrong network detected:', $chainId);
 		$warnedOnce = true;
 	}
 
-	// Debug reactive statement (remove in production)
 	$: if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
 		console.log('🎯 Reactive state:', {
 			$connected: $connected,
@@ -582,9 +700,11 @@
 			$contractExists,
 			$currentAddress,
 			$balance: $balance.toString(),
+			ethBalance: ethBalance.toString(),
 			$chainId: $chainId,
 			$isConnectedAndReady: $isConnectedAndReady,
-			$networkError
+			$networkError,
+			canClaimFaucet
 		});
 	}
 </script>
@@ -633,10 +753,46 @@
 					</p>
 				</div>
 
-				<div class="space-y-3 text-center">
-					<!-- <button
+				<!-- ETH Balance and Faucet -->
+				<div class="space-y-3 rounded bg-gray-700 p-4 text-center">
+					<div>
+						<p class="text-white">
+							ETH Balance:
+							<span class="font-bold text-blue-300">
+								{formatEthBalance(ethBalance)} ETH
+							</span>
+						</p>
+					</div>
+
+					<!-- ETH Faucet Button -->
+					<button
+						class="w-full rounded bg-blue-500 px-4 py-3 font-semibold text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+						on:click={claimETH}
+						disabled={faucetLoading || !canClaimFaucet || !$contractExists}
+					>
+						{#if faucetLoading}
+							⏳ Claiming ETH...
+						{:else if !canClaimFaucet}
+							💧 ETH Faucet ({getCooldownRemaining()} left)
+						{:else}
+							💧 Claim {FAUCET_AMOUNT} ETH
+						{/if}
+					</button>
+
+					{#if faucetError}
+						<p class="text-xs text-red-300">{faucetError}</p>
+					{/if}
+
+					{#if !canClaimFaucet}
+						<p class="text-xs text-yellow-300">Cooldown: 24 hours between claims</p>
+					{/if}
+				</div>
+
+				<!-- WDC Token Section -->
+				<!-- <div class="space-y-3 text-center">
+					<button
 						class="w-full rounded bg-green-500 px-4 py-3 font-semibold text-white transition-colors hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-50"
-						on:click={claimReward}
+						on:click={() => claimReward(10)}
 						disabled={$loading || !$contractExists}
 					>
 						{$loading
@@ -644,16 +800,16 @@
 							: $contractExists
 								? '🎁 Claim 10 WDC'
 								: '❌ Contract Unavailable'}
-					</button> -->
+					</button>
 
 					{#if $reward > 0n}
 						<p class="text-sm text-green-400">Claimed {formatBalance($reward)} WDC</p>
 					{/if}
-				</div>
+				</div> -->
 
-				<div class="rounded bg-gray-700 p-4 text-center">
+				<!-- <div class="rounded bg-gray-700 p-4 text-center">
 					<p class="text-white">
-						Balance:
+						WDC Balance:
 						<span class="font-bold text-yellow-300">
 							{$contractExists ? formatBalance($balance) : 'N/A'} WDC
 						</span>
@@ -661,7 +817,7 @@
 					{#if !$contractExists}
 						<p class="mt-1 text-xs text-red-300">Contract not accessible</p>
 					{/if}
-				</div>
+				</div> -->
 
 				<button
 					class="w-full rounded bg-red-500 px-4 py-2 font-semibold text-white transition-colors hover:bg-red-600"
@@ -694,7 +850,7 @@
 			<div class="rounded-lg bg-yellow-600 p-4 text-center">
 				<p class="font-semibold text-white">⚠️ Wrong Network</p>
 				<p class="text-sm text-yellow-100">
-					Current: {$chainId} | Required: 31337 (Sabdarana)
+					Current: {$chainId} | Required: 31337 (Sabdarana Global Network)
 				</p>
 				<p class="mt-1 text-xs text-yellow-100">Please switch network in your wallet</p>
 			</div>
@@ -704,7 +860,8 @@
 		{#if $contractExists}
 			<div class="text-center text-xs text-gray-500">
 				<p>Contract: {CONTRACT_ADDRESS}</p>
-				<p>Network: Sabdarana (Chain ID: 31337)</p>
+				<p>Network: Sabdarana Global Network (Chain ID: 31337)</p>
+				<p>RPC: {RPC_URL}</p>
 			</div>
 		{/if}
 	</div>

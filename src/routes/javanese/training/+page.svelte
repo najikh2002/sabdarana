@@ -138,6 +138,7 @@
 			text={`"${$drawVM.activeLetter}"`}
 			onNextCharacter={handleNextCharacter}
 			onCloseDialog={handleCloseDialog}
+			learning="training"
 		/>
 	{/if}
 </div>

@@ -103,10 +103,10 @@
 						<div class="border-t border-gray-600 pt-6">
 							<h2 class="mb-4 text-lg font-semibold text-white">Web3 Wallet</h2>
 							{#if $connected}
-								<p class="text-sm text-gray-400">Wallet Address</p>
+								<!-- <p class="text-sm text-gray-400">Wallet Address</p>
 								<p class="font-mono text-sm break-all text-[#b3f135]">{$signerAddress}</p>
 								<p class="mt-2 text-sm text-gray-400">WDC Balance</p>
-								<p class="text-lg font-bold text-white">{wdcBalance} WDC</p>
+								<p class="text-lg font-bold text-white">{wdcBalance} WDC</p> -->
 								<div class="mt-4">
 									<ConnectWallet />
 								</div>
